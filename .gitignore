@@ -32,4 +32,5 @@ build/
 # Logs & local data
 *.log
 *.sqlite
+*.sqlite3
 *.db
