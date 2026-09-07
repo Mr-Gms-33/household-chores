@@ -8,10 +8,16 @@ from .models import Household
 
 
 def get_user_household(user):
-    """Return the signed-in user's household, or None if they are not a member."""
+    """Return the signed-in user's household, or None if they are not a member.
+
+    A user may belong to at most one household; more than one is an error.
+    """
     if not getattr(user, "is_authenticated", False):
         return None
-    return Household.objects.filter(members=user).first()
+    try:
+        return Household.objects.get(members=user)
+    except Household.DoesNotExist:
+        return None
 
 
 def household_required(view_func):

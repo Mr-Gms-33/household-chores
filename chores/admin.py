@@ -1,10 +1,28 @@
+from django import forms
 from django.contrib import admin
+from django.core.exceptions import ValidationError as DjangoValidationError
 
-from .models import ChoreInstance, ChoreTemplate, Household, WeekPlan
+from .models import ChoreInstance, ChoreTemplate, Household, WeekPlan, validate_household_member_pks
+
+
+class HouseholdAdminForm(forms.ModelForm):
+    class Meta:
+        model = Household
+        fields = "__all__"
+
+    def clean_members(self):
+        members = self.cleaned_data["members"]
+        member_pks = [user.pk for user in members]
+        try:
+            validate_household_member_pks(self.instance, member_pks, replace=True)
+        except DjangoValidationError as exc:
+            raise forms.ValidationError(exc.messages)
+        return members
 
 
 @admin.register(Household)
 class HouseholdAdmin(admin.ModelAdmin):
+    form = HouseholdAdminForm
     list_display = ("name",)
     filter_horizontal = ("members",)
 

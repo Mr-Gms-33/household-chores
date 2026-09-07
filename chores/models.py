@@ -1,8 +1,31 @@
 from datetime import timedelta
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import m2m_changed
 from django.utils import timezone
+
+MAX_HOUSEHOLD_MEMBERS = 2
+
+
+def validate_household_member_pks(household, member_pks, *, replace=False):
+    """Reject more than two members, or a user who already belongs elsewhere."""
+    incoming = {int(pk) for pk in member_pks}
+    if household.pk and not replace:
+        current = set(household.members.values_list("pk", flat=True))
+        resulting = current | incoming
+    else:
+        resulting = incoming
+    if len(resulting) > MAX_HOUSEHOLD_MEMBERS:
+        raise ValidationError("A household can have at most two members.")
+    if not incoming:
+        return
+    already_elsewhere = Household.objects.filter(members__in=incoming)
+    if household.pk:
+        already_elsewhere = already_elsewhere.exclude(pk=household.pk)
+    if already_elsewhere.exists():
+        raise ValidationError("A user cannot be a member of two households at once.")
 
 
 def current_week_start(today=None):
@@ -21,6 +44,55 @@ class Household(models.Model):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        if not self.pk:
+            return
+        member_pks = list(self.members.values_list("pk", flat=True))
+        validate_household_member_pks(self, member_pks, replace=True)
+
+
+def _household_members_changed(sender, instance, action, reverse, pk_set, **kwargs):
+    if action not in ("pre_add", "pre_set"):
+        return
+    pks = pk_set or set()
+    if reverse:
+        user = instance
+        existing = Household.objects.filter(members=user)
+        if action == "pre_add":
+            if existing.exists() or len(pks) > 1:
+                raise ValidationError(
+                    "A user cannot be a member of two households at once."
+                )
+            for household_id in pks:
+                household = Household.objects.get(pk=household_id)
+                if household.members.count() >= MAX_HOUSEHOLD_MEMBERS:
+                    raise ValidationError(
+                        "A household can have at most two members."
+                    )
+        elif action == "pre_set":
+            if len(pks) > 1:
+                raise ValidationError(
+                    "A user cannot be a member of two households at once."
+                )
+            for household_id in pks:
+                household = Household.objects.get(pk=household_id)
+                already_here = household.members.filter(pk=user.pk).exists()
+                if not already_here and household.members.count() >= MAX_HOUSEHOLD_MEMBERS:
+                    raise ValidationError(
+                        "A household can have at most two members."
+                    )
+        return
+
+    replace = action == "pre_set"
+    validate_household_member_pks(instance, pks, replace=replace)
+
+
+m2m_changed.connect(
+    _household_members_changed,
+    sender=Household.members.through,
+)
 
 
 class Assignee(models.TextChoices):
