@@ -773,3 +773,294 @@ class ChoreTemplateCrudTests(HouseholdFixturesMixin, TestCase):
         template.refresh_from_db()
         self.assertEqual(template.name, "Vacuum")
         self.assertEqual(template.household, self.household)
+
+
+class WeeklyBoardTests(HouseholdFixturesMixin, TestCase):
+    def _make_week_plan(self, household=None):
+        household = household or self.household
+        return WeekPlan.objects.create(household=household, week_start=self.week_start)
+
+    def _make_instance(self, week_plan=None, template=None, **kwargs):
+        week_plan = week_plan or self._make_week_plan()
+        defaults = {
+            "title": "Vacuum",
+            "date": self.week_start,
+            "assignee": Assignee.EITHER,
+        }
+        defaults.update(kwargs)
+        return ChoreInstance.objects.create(
+            week_plan=week_plan, template=template, **defaults
+        )
+
+    def test_home_links_to_board(self):
+        self.client.login(username="alice", password="password123")
+        response = self.client.get(reverse("home"))
+        self.assertContains(response, reverse("board"))
+
+    def test_board_requires_login(self):
+        board_url = reverse("board")
+        response = self.client.get(board_url)
+        self.assertRedirects(response, f"/accounts/login/?next={board_url}")
+
+    def test_action_urls_require_login(self):
+        instance = self._make_instance()
+        assignee_url = reverse("board_chore_assignee", args=[instance.pk])
+        move_url = reverse("board_chore_move", args=[instance.pk])
+        for url in (assignee_url, move_url):
+            with self.subTest(url=url):
+                response = self.client.post(url)
+                self.assertRedirects(response, f"/accounts/login/?next={url}")
+
+    def test_non_member_gets_clear_message_not_500(self):
+        self.client.login(username="charlie", password="password123")
+        response = self.client.get(reverse("board"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "not a member of a household")
+
+    def test_non_member_gets_403_on_actions(self):
+        instance = self._make_instance()
+        self.client.login(username="charlie", password="password123")
+        response = self.client.post(
+            reverse("board_chore_assignee", args=[instance.pk]),
+            {"assignee": Assignee.PARTNER_A},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_board_renders_seven_days_with_no_week_plan(self):
+        self.client.login(username="alice", password="password123")
+        response = self.client.get(reverse("board"))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(WeekPlan.objects.exists())
+        for offset in range(7):
+            day = self.week_start + timedelta(days=offset)
+            self.assertContains(response, day.strftime("%A"))
+        self.assertContains(response, "No chores for this day.", count=7)
+
+    def test_chores_render_under_correct_day_and_empty_days_still_render(self):
+        week_plan = self._make_week_plan()
+        self._make_instance(
+            week_plan=week_plan, title="Vacuum", date=self.week_start
+        )
+        self._make_instance(
+            week_plan=week_plan,
+            title="Trash",
+            date=self.week_start + timedelta(days=6),
+        )
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        monday_pos = content.find(self.week_start.strftime("%A"))
+        sunday_pos = content.find(
+            (self.week_start + timedelta(days=6)).strftime("%A")
+        )
+        vacuum_pos = content.find("Vacuum")
+        trash_pos = content.find("Trash")
+        self.assertTrue(monday_pos < vacuum_pos < sunday_pos)
+        self.assertTrue(sunday_pos < trash_pos)
+        # Five empty days remain in between.
+        self.assertContains(response, "No chores for this day.", count=5)
+
+    def test_chores_within_a_day_are_in_stable_order(self):
+        week_plan = self._make_week_plan()
+        first = self._make_instance(week_plan=week_plan, title="Bravo")
+        second = self._make_instance(week_plan=week_plan, title="Alpha")
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+        content = response.content.decode()
+        self.assertTrue(content.find("Alpha") < content.find("Bravo"))
+        self.assertEqual(list(response.context["days"][0]["chores"]), [
+            {
+                "instance": second,
+                "assignee_form": response.context["days"][0]["chores"][0][
+                    "assignee_form"
+                ],
+                "move_form": response.context["days"][0]["chores"][0]["move_form"],
+            },
+            {
+                "instance": first,
+                "assignee_form": response.context["days"][0]["chores"][1][
+                    "assignee_form"
+                ],
+                "move_form": response.context["days"][0]["chores"][1]["move_form"],
+            },
+        ])
+
+    def test_board_shows_title_and_assignee(self):
+        self._make_instance(title="Vacuum", assignee=Assignee.PARTNER_A)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        self.assertContains(response, "Vacuum")
+        self.assertContains(response, "Partner A")
+
+    def test_update_assignee_persists_and_reloads_under_same_day(self):
+        instance = self._make_instance(assignee=Assignee.EITHER)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_assignee", args=[instance.pk]),
+            {"assignee": Assignee.PARTNER_B},
+        )
+        self.assertRedirects(response, reverse("board"))
+        instance.refresh_from_db()
+        self.assertEqual(instance.assignee, Assignee.PARTNER_B)
+
+        board = self.client.get(reverse("board"))
+        self.assertContains(board, "Partner B")
+
+    def test_move_within_current_week_persists_and_updates_grouping(self):
+        instance = self._make_instance(date=self.week_start)
+        new_date = self.week_start + timedelta(days=3)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_move", args=[instance.pk]),
+            {"date": new_date.isoformat()},
+        )
+        self.assertRedirects(response, reverse("board"))
+        instance.refresh_from_db()
+        self.assertEqual(instance.date, new_date)
+
+        board = self.client.get(reverse("board"))
+        content = board.content.decode()
+        old_day_heading = self.week_start.strftime("%A")
+        new_day_heading = new_date.strftime("%A")
+        # Chore title should now appear after the new day's heading and
+        # before the next day's heading (or end of days), not under Monday.
+        old_section_end = content.find(
+            (self.week_start + timedelta(days=1)).strftime("%A")
+        )
+        self.assertNotIn(instance.title, content[:old_section_end])
+        self.assertGreater(content.find(new_day_heading), -1)
+
+    def test_move_rejects_out_of_week_date(self):
+        instance = self._make_instance(date=self.week_start)
+        outside = self.week_start - timedelta(days=1)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_move", args=[instance.pk]),
+            {"date": outside.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        instance.refresh_from_db()
+        self.assertEqual(instance.date, self.week_start)
+
+    def test_update_rejects_invalid_assignee(self):
+        instance = self._make_instance(assignee=Assignee.EITHER)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_assignee", args=[instance.pk]),
+            {"assignee": "not_a_real_assignee"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        instance.refresh_from_db()
+        self.assertEqual(instance.assignee, Assignee.EITHER)
+
+    def test_cross_household_chore_returns_404_on_actions(self):
+        other = Household.objects.create(name="Oak Avenue")
+        other.members.add(self.outsider)
+        other_plan = self._make_week_plan(household=other)
+        foreign = self._make_instance(week_plan=other_plan, title="Foreign")
+        self.client.login(username="alice", password="password123")
+
+        assignee_response = self.client.post(
+            reverse("board_chore_assignee", args=[foreign.pk]),
+            {"assignee": Assignee.PARTNER_A},
+        )
+        move_response = self.client.post(
+            reverse("board_chore_move", args=[foreign.pk]),
+            {"date": self.week_start.isoformat()},
+        )
+
+        self.assertEqual(assignee_response.status_code, 404)
+        self.assertEqual(move_response.status_code, 404)
+        foreign.refresh_from_db()
+        self.assertEqual(foreign.assignee, Assignee.EITHER)
+
+    def test_chore_from_non_current_week_plan_returns_404(self):
+        old_week_start = self.week_start - timedelta(days=7)
+        old_plan = WeekPlan.objects.create(
+            household=self.household, week_start=old_week_start
+        )
+        old_instance = self._make_instance(
+            week_plan=old_plan, title="Old chore", date=old_week_start
+        )
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_assignee", args=[old_instance.pk]),
+            {"assignee": Assignee.PARTNER_A},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_move_or_update_never_changes_template(self):
+        template = ChoreTemplate.objects.create(
+            household=self.household,
+            name="Vacuum",
+            weekday=Weekday.MONDAY,
+            default_assignee=Assignee.PARTNER_A,
+        )
+        week_plan = self._make_week_plan()
+        instance = self._make_instance(
+            week_plan=week_plan,
+            template=template,
+            title="Vacuum",
+            date=self.week_start,
+            assignee=Assignee.PARTNER_A,
+        )
+        self.client.login(username="alice", password="password123")
+
+        self.client.post(
+            reverse("board_chore_assignee", args=[instance.pk]),
+            {"assignee": Assignee.PARTNER_B},
+        )
+        self.client.post(
+            reverse("board_chore_move", args=[instance.pk]),
+            {"date": (self.week_start + timedelta(days=2)).isoformat()},
+        )
+
+        template.refresh_from_db()
+        self.assertEqual(template.weekday, Weekday.MONDAY)
+        self.assertEqual(template.default_assignee, Assignee.PARTNER_A)
+
+    def test_get_requests_to_action_urls_do_not_mutate(self):
+        instance = self._make_instance(
+            assignee=Assignee.EITHER, date=self.week_start
+        )
+        self.client.login(username="alice", password="password123")
+
+        assignee_response = self.client.get(
+            reverse("board_chore_assignee", args=[instance.pk])
+        )
+        move_response = self.client.get(
+            reverse("board_chore_move", args=[instance.pk])
+        )
+
+        self.assertIn(assignee_response.status_code, (302, 405))
+        self.assertIn(move_response.status_code, (302, 405))
+        instance.refresh_from_db()
+        self.assertEqual(instance.assignee, Assignee.EITHER)
+        self.assertEqual(instance.date, self.week_start)
+
+    def test_move_select_only_offers_current_week_dates(self):
+        instance = self._make_instance()
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        move_form = response.context["days"][0]["chores"][0]["move_form"]
+        offered_dates = [value for value, _label in move_form.fields["date"].choices]
+        expected_dates = [
+            (self.week_start + timedelta(days=i)).isoformat() for i in range(7)
+        ]
+        self.assertEqual(offered_dates, expected_dates)

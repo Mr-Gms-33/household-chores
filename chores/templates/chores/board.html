@@ -1,0 +1,43 @@
+{% extends "chores/base.html" %}
+
+{% block title %}Weekly board — Household Chores{% endblock %}
+
+{% block content %}
+  <h1>Weekly board</h1>
+  {% if household %}
+    <p>Household: {{ household.name }}</p>
+    {% if not week_plan %}
+      <p>No week plan yet for this week. <a href="{% url 'home' %}">Generate this week first</a>.</p>
+    {% endif %}
+    {% for day in days %}
+      <section>
+        <h2>{{ day.weekday_name }} — {{ day.date|date:"Y-m-d" }}</h2>
+        {% if day.chores %}
+          <ul>
+            {% for chore in day.chores %}
+              <li>
+                <strong>{{ chore.instance.title }}</strong>
+                — currently: {{ chore.instance.get_assignee_display }}
+                <form method="post" action="{% url 'board_chore_assignee' chore.instance.pk %}">
+                  {% csrf_token %}
+                  {{ chore.assignee_form.assignee }}
+                  <button type="submit">Update assignee</button>
+                </form>
+                <form method="post" action="{% url 'board_chore_move' chore.instance.pk %}">
+                  {% csrf_token %}
+                  {{ chore.move_form.date }}
+                  <button type="submit">Move</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No chores for this day.</p>
+        {% endif %}
+      </section>
+    {% endfor %}
+    <p><a href="{% url 'home' %}">Back home</a></p>
+  {% else %}
+    <p>You are not a member of a household.</p>
+  {% endif %}
+{% endblock %}

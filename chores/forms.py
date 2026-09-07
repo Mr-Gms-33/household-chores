@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django import forms
 from django.utils import timezone
@@ -62,3 +62,50 @@ class ChoreTemplateForm(forms.ModelForm):
         if not name:
             raise forms.ValidationError("This field is required.")
         return name
+
+
+class ChoreAssigneeForm(forms.ModelForm):
+    """Change only the assignee of an existing ChoreInstance."""
+
+    class Meta:
+        model = ChoreInstance
+        fields = ("assignee",)
+
+
+class ChoreMoveForm(forms.Form):
+    """Move a ChoreInstance to another day within the current week only.
+
+    The `date` field is a ChoiceField restricted to the 7 days of the given
+    `week_start`, so a request cannot select a day outside the current week
+    from the rendered `<select>`. We still re-validate the parsed date
+    against the week bounds in `clean_date` as defence in depth.
+    """
+
+    date = forms.ChoiceField()
+
+    def __init__(self, *args, week_start=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.week_start = week_start
+        if week_start:
+            self.fields["date"].choices = [
+                (
+                    (week_start + timedelta(days=offset)).isoformat(),
+                    "{name} ({iso})".format(
+                        name=(week_start + timedelta(days=offset)).strftime("%A"),
+                        iso=(week_start + timedelta(days=offset)).isoformat(),
+                    ),
+                )
+                for offset in range(7)
+            ]
+
+    def clean_date(self):
+        raw = self.cleaned_data["date"]
+        try:
+            parsed = date.fromisoformat(raw)
+        except ValueError:
+            raise forms.ValidationError("Enter a valid date.")
+        if self.week_start is not None:
+            week_end = self.week_start + timedelta(days=6)
+            if parsed < self.week_start or parsed > week_end:
+                raise forms.ValidationError("Date must be within the current week.")
+        return parsed
