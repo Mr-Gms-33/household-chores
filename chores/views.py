@@ -62,6 +62,13 @@ def _board_context(household):
         household=household, week_start=week_start
     ).first()
 
+    if week_plan is not None:
+        total_count = week_plan.chores.count()
+        done_count = week_plan.chores.filter(complete=True).count()
+    else:
+        total_count = 0
+        done_count = 0
+
     days = []
     for offset in range(7):
         day_date = week_start + timedelta(days=offset)
@@ -93,6 +100,8 @@ def _board_context(household):
         "week_start": week_start,
         "week_plan": week_plan,
         "days": days,
+        "done_count": done_count,
+        "total_count": total_count,
     }
 
 
@@ -156,6 +165,20 @@ def board_chore_move(request, pk):
         _board_context(request.household),
         status=400,
     )
+
+
+@household_required
+def board_chore_toggle(request, pk):
+    if request.method != "POST":
+        return redirect("board")
+    chore = _get_current_week_chore(request, pk)
+    chore.complete = not chore.complete
+    chore.save(update_fields=["complete"])
+    if chore.complete:
+        messages.success(request, "Chore marked complete.")
+    else:
+        messages.success(request, "Chore marked incomplete.")
+    return redirect("board")
 
 
 @household_required

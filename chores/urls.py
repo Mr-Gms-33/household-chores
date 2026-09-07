@@ -17,6 +17,11 @@ urlpatterns = [
         views.board_chore_move,
         name="board_chore_move",
     ),
+    path(
+        "board/chores/<int:pk>/complete/",
+        views.board_chore_toggle,
+        name="board_chore_toggle",
+    ),
     path("templates/", views.template_list, name="template_list"),
     path("templates/new/", views.template_create, name="template_create"),
     path("templates/<int:pk>/edit/", views.template_edit, name="template_edit"),

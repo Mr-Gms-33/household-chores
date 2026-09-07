@@ -6,6 +6,7 @@
   <h1>Weekly board</h1>
   {% if household %}
     <p>Household: {{ household.name }}</p>
+    <p>Completed this week: {{ done_count }} / {{ total_count }}</p>
     {% if not week_plan %}
       <p>No week plan yet for this week. <a href="{% url 'home' %}">Generate this week first</a>.</p>
     {% endif %}
@@ -16,8 +17,23 @@
           <ul>
             {% for chore in day.chores %}
               <li>
-                <strong>{{ chore.instance.title }}</strong>
+                {% if chore.instance.complete %}
+                  <strong style="text-decoration: line-through;">{{ chore.instance.title }}</strong>
+                  <span>Completed</span>
+                {% else %}
+                  <strong>{{ chore.instance.title }}</strong>
+                {% endif %}
                 — currently: {{ chore.instance.get_assignee_display }}
+                <form method="post" action="{% url 'board_chore_toggle' chore.instance.pk %}">
+                  {% csrf_token %}
+                  <label>
+                    <input type="checkbox" {% if chore.instance.complete %}checked{% endif %} disabled>
+                    {% if chore.instance.complete %}Completed{% else %}Mark complete{% endif %}
+                  </label>
+                  <button type="submit">
+                    {% if chore.instance.complete %}Mark incomplete{% else %}Mark complete{% endif %}
+                  </button>
+                </form>
                 <form method="post" action="{% url 'board_chore_assignee' chore.instance.pk %}">
                   {% csrf_token %}
                   {{ chore.assignee_form.assignee }}

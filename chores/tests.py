@@ -1064,3 +1064,202 @@ class WeeklyBoardTests(HouseholdFixturesMixin, TestCase):
             (self.week_start + timedelta(days=i)).isoformat() for i in range(7)
         ]
         self.assertEqual(offered_dates, expected_dates)
+
+
+class ChoreCompletionTests(HouseholdFixturesMixin, TestCase):
+    def _make_week_plan(self, household=None):
+        household = household or self.household
+        return WeekPlan.objects.create(household=household, week_start=self.week_start)
+
+    def _make_instance(self, week_plan=None, template=None, **kwargs):
+        week_plan = week_plan or self._make_week_plan()
+        defaults = {
+            "title": "Vacuum",
+            "date": self.week_start,
+            "assignee": Assignee.EITHER,
+        }
+        defaults.update(kwargs)
+        return ChoreInstance.objects.create(
+            week_plan=week_plan, template=template, **defaults
+        )
+
+    def test_toggle_marks_chore_complete_and_redirects_to_board(self):
+        instance = self._make_instance(complete=False)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[instance.pk])
+        )
+
+        self.assertRedirects(response, reverse("board"))
+        instance.refresh_from_db()
+        self.assertTrue(instance.complete)
+
+        board = self.client.get(reverse("board"))
+        self.assertContains(board, "Completed")
+
+    def test_toggle_marks_complete_chore_back_to_incomplete(self):
+        instance = self._make_instance(complete=True)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[instance.pk])
+        )
+
+        self.assertRedirects(response, reverse("board"))
+        instance.refresh_from_db()
+        self.assertFalse(instance.complete)
+
+    def test_chore_stays_visible_under_original_day_after_toggle(self):
+        instance = self._make_instance(complete=False, date=self.week_start)
+        self.client.login(username="alice", password="password123")
+
+        self.client.post(reverse("board_chore_toggle", args=[instance.pk]))
+        board = self.client.get(reverse("board"))
+        content = board.content.decode()
+
+        monday_pos = content.find(self.week_start.strftime("%A"))
+        tuesday_pos = content.find(
+            (self.week_start + timedelta(days=1)).strftime("%A")
+        )
+        vacuum_pos = content.find(instance.title)
+        self.assertTrue(monday_pos < vacuum_pos < tuesday_pos)
+
+    def test_summary_reflects_zero_done(self):
+        week_plan = self._make_week_plan()
+        self._make_instance(week_plan=week_plan, title="A", complete=False)
+        self._make_instance(week_plan=week_plan, title="B", complete=False)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.context["done_count"], 0)
+        self.assertEqual(response.context["total_count"], 2)
+        self.assertContains(response, "0 / 2")
+
+    def test_summary_reflects_some_done(self):
+        week_plan = self._make_week_plan()
+        self._make_instance(week_plan=week_plan, title="A", complete=True)
+        self._make_instance(week_plan=week_plan, title="B", complete=False)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.context["done_count"], 1)
+        self.assertEqual(response.context["total_count"], 2)
+        self.assertContains(response, "1 / 2")
+
+    def test_summary_reflects_all_done(self):
+        week_plan = self._make_week_plan()
+        self._make_instance(week_plan=week_plan, title="A", complete=True)
+        self._make_instance(week_plan=week_plan, title="B", complete=True)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.context["done_count"], 2)
+        self.assertEqual(response.context["total_count"], 2)
+        self.assertContains(response, "2 / 2")
+
+    def test_summary_is_zero_zero_with_no_week_plan(self):
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(reverse("board"))
+
+        self.assertEqual(response.context["done_count"], 0)
+        self.assertEqual(response.context["total_count"], 0)
+        self.assertContains(response, "0 / 0")
+
+    def test_summary_updates_immediately_after_toggle_redirect(self):
+        week_plan = self._make_week_plan()
+        instance = self._make_instance(
+            week_plan=week_plan, title="A", complete=False
+        )
+        self._make_instance(week_plan=week_plan, title="B", complete=False)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[instance.pk]), follow=True
+        )
+
+        self.assertContains(response, "1 / 2")
+
+    def test_any_household_member_can_toggle_any_assignee(self):
+        instance = self._make_instance(assignee=Assignee.PARTNER_A, complete=False)
+        self.client.login(username="bob", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[instance.pk])
+        )
+
+        self.assertRedirects(response, reverse("board"))
+        instance.refresh_from_db()
+        self.assertTrue(instance.complete)
+
+    def test_toggle_requires_login(self):
+        instance = self._make_instance()
+        toggle_url = reverse("board_chore_toggle", args=[instance.pk])
+
+        response = self.client.post(toggle_url)
+
+        self.assertRedirects(response, f"/accounts/login/?next={toggle_url}")
+
+    def test_non_member_gets_403_on_toggle(self):
+        instance = self._make_instance()
+        self.client.login(username="charlie", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[instance.pk])
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_cross_household_chore_returns_404_on_toggle(self):
+        other = Household.objects.create(name="Oak Avenue")
+        other.members.add(self.outsider)
+        other_plan = self._make_week_plan(household=other)
+        foreign = self._make_instance(
+            week_plan=other_plan, title="Foreign", complete=False
+        )
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[foreign.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
+        foreign.refresh_from_db()
+        self.assertFalse(foreign.complete)
+
+    def test_chore_from_non_current_week_plan_returns_404_on_toggle(self):
+        old_week_start = self.week_start - timedelta(days=7)
+        old_plan = WeekPlan.objects.create(
+            household=self.household, week_start=old_week_start
+        )
+        old_instance = self._make_instance(
+            week_plan=old_plan,
+            title="Old chore",
+            date=old_week_start,
+            complete=False,
+        )
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.post(
+            reverse("board_chore_toggle", args=[old_instance.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
+        old_instance.refresh_from_db()
+        self.assertFalse(old_instance.complete)
+
+    def test_get_request_to_toggle_does_not_mutate_and_redirects(self):
+        instance = self._make_instance(complete=False)
+        self.client.login(username="alice", password="password123")
+
+        response = self.client.get(
+            reverse("board_chore_toggle", args=[instance.pk])
+        )
+
+        self.assertRedirects(response, reverse("board"))
+        instance.refresh_from_db()
+        self.assertFalse(instance.complete)
