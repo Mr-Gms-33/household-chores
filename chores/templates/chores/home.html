@@ -1,0 +1,21 @@
+{% extends "chores/base.html" %}
+
+{% block title %}Home — Household Chores{% endblock %}
+
+{% block content %}
+  <h1>Household Chores</h1>
+  {% if household %}
+    <p>You belong to <strong>{{ household.name }}</strong>.</p>
+    <form method="post" action="{% url 'generate_week' %}">
+      {% csrf_token %}
+      <button type="submit">Generate this week</button>
+    </form>
+    <p><a href="{% url 'add_chore' %}">Add a one-off chore</a></p>
+  {% else %}
+    <p>You are not a member of a household.</p>
+  {% endif %}
+  <form method="post" action="{% url 'logout' %}">
+    {% csrf_token %}
+    <button type="submit">Log out</button>
+  </form>
+{% endblock %}
