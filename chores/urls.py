@@ -6,4 +6,8 @@ urlpatterns = [
     path("", views.home, name="home"),
     path("week/generate/", views.generate_week, name="generate_week"),
     path("week/add-chore/", views.add_chore, name="add_chore"),
+    path("templates/", views.template_list, name="template_list"),
+    path("templates/new/", views.template_create, name="template_create"),
+    path("templates/<int:pk>/edit/", views.template_edit, name="template_edit"),
+    path("templates/<int:pk>/delete/", views.template_delete, name="template_delete"),
 ]

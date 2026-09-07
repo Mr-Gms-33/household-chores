@@ -10,6 +10,7 @@
       {% csrf_token %}
       <button type="submit">Generate this week</button>
     </form>
+    <p><a href="{% url 'template_list' %}">Chore templates</a></p>
     <p><a href="{% url 'add_chore' %}">Add a one-off chore</a></p>
   {% else %}
     <p>You are not a member of a household.</p>

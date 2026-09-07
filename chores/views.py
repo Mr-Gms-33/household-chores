@@ -1,10 +1,10 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import OneOffChoreForm
+from .forms import ChoreTemplateForm, OneOffChoreForm
 from .household import get_user_household, household_required
-from .models import ChoreInstance, WeekPlan, current_week_start
+from .models import ChoreInstance, ChoreTemplate, WeekPlan, current_week_start
 
 
 @login_required
@@ -46,4 +46,78 @@ def add_chore(request):
         request,
         "chores/add_chore.html",
         {"form": form, "household": request.household},
+    )
+
+
+@household_required
+def template_list(request):
+    templates = request.household.templates.order_by("weekday", "name", "pk")
+    return render(
+        request,
+        "chores/template_list.html",
+        {"household": request.household, "templates": templates},
+    )
+
+
+@household_required
+def template_create(request):
+    if request.method == "POST":
+        form = ChoreTemplateForm(request.POST)
+        if form.is_valid():
+            template = form.save(commit=False)
+            template.household = request.household
+            template.save()
+            messages.success(request, "Template created.")
+            return redirect("template_list")
+    else:
+        form = ChoreTemplateForm()
+    return render(
+        request,
+        "chores/template_form.html",
+        {
+            "form": form,
+            "household": request.household,
+            "heading": "New chore template",
+        },
+    )
+
+
+@household_required
+def template_edit(request, pk):
+    template = get_object_or_404(
+        ChoreTemplate, pk=pk, household=request.household
+    )
+    if request.method == "POST":
+        form = ChoreTemplateForm(request.POST, instance=template)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Template updated.")
+            return redirect("template_list")
+    else:
+        form = ChoreTemplateForm(instance=template)
+    return render(
+        request,
+        "chores/template_form.html",
+        {
+            "form": form,
+            "household": request.household,
+            "heading": "Edit chore template",
+            "template": template,
+        },
+    )
+
+
+@household_required
+def template_delete(request, pk):
+    template = get_object_or_404(
+        ChoreTemplate, pk=pk, household=request.household
+    )
+    if request.method == "POST":
+        template.delete()
+        messages.success(request, "Template deleted.")
+        return redirect("template_list")
+    return render(
+        request,
+        "chores/template_confirm_delete.html",
+        {"household": request.household, "template": template},
     )

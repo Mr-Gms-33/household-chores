@@ -1,0 +1,14 @@
+{% extends "chores/base.html" %}
+
+{% block title %}Delete template — Household Chores{% endblock %}
+
+{% block content %}
+  <h1>Delete chore template</h1>
+  <p>Household: {{ household.name }}</p>
+  <p>Delete “{{ template.name }}”? Existing chores already on this week's plan will stay.</p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit">Delete</button>
+  </form>
+  <p><a href="{% url 'template_list' %}">Cancel</a></p>
+{% endblock %}

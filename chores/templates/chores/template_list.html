@@ -1,0 +1,25 @@
+{% extends "chores/base.html" %}
+
+{% block title %}Chore templates — Household Chores{% endblock %}
+
+{% block content %}
+  <h1>Chore templates</h1>
+  <p>Household: {{ household.name }}</p>
+  <p><a href="{% url 'template_create' %}">Create a template</a></p>
+  {% if templates %}
+    <ul>
+      {% for template in templates %}
+        <li>
+          {{ template.name }} —
+          {{ template.get_weekday_display }} —
+          {% if template.default_assignee %}{{ template.get_default_assignee_display }}{% else %}Unset{% endif %}
+          <a href="{% url 'template_edit' template.pk %}">Edit</a>
+          <a href="{% url 'template_delete' template.pk %}">Delete</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No chore templates yet. Create one to use when generating this week.</p>
+  {% endif %}
+  <p><a href="{% url 'home' %}">Back home</a></p>
+{% endblock %}
